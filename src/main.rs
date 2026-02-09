@@ -19,6 +19,8 @@ use crate::config::AppConfig;
 use crate::ipc::types::{Envelope, Payload};
 use crate::jito::executor::JitoExecutor;
 use crate::jito::tip_oracle::TipOracle;
+use crate::metrics::prometheus::init_metrics;
+use crate::observability::server::start_metrics;
 use crate::utils::keypair::load_keypair;
 
 use anyhow::{Context, Result};
@@ -26,6 +28,7 @@ use log::{error, info, warn};
 use solana_sdk::signature::Signer;
 use std::sync::Arc;
 use tokio::task::JoinSet;
+use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -47,6 +50,9 @@ async fn main() -> Result<()> {
 
     let keypair = load_keypair(&cfg.keypair_path)?;
     info!("signer_pubkey={}", keypair.pubkey());
+
+    // Metrics registry init (safe to call once)
+    let _ = init_metrics();
 
     let tip_oracle = Box::leak(Box::new(TipOracle::new(100_000)));
 
@@ -74,8 +80,14 @@ async fn main() -> Result<()> {
         tasks.spawn(async move { run_ipc(rx, exec, shutdown).await });
     }
 
+    // metrics server task
+    tasks.spawn(async move {
+        start_metrics().await;
+        Ok(())
+    });
+
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
+        _ = shutdown_signal() => {
             warn!("shutdown requested");
         }
         res = wait_any_task(&mut tasks) => {
@@ -88,12 +100,22 @@ async fn main() -> Result<()> {
 
     cfg.shutdown.request();
 
-    while let Some(joined) = tasks.join_next().await {
-        match joined {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => error!("task error: {e:#}"),
-            Err(e) => error!("task join error: {e}"),
+    // graceful wait
+    let drain = async {
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => error!("task error: {e:#}"),
+                Err(e) => error!("task join error: {e}"),
+            }
         }
+    };
+
+    // timeout to avoid hanging forever
+    if timeout(Duration::from_secs(3), drain).await.is_err() {
+        warn!("shutdown timeout; aborting remaining tasks");
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
     }
 
     info!("titan stopped");
@@ -105,6 +127,36 @@ async fn wait_any_task(tasks: &mut JoinSet<Result<()>>) -> Result<()> {
         Some(Ok(r)) => r,
         Some(Err(e)) => Err(anyhow::anyhow!(e)),
         None => Ok(()),
+    }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let ctrl_c = tokio::signal::ctrl_c();
+
+        let term = async {
+            match signal(SignalKind::terminate()) {
+                Ok(mut s) => {
+                    let _ = s.recv().await;
+                }
+                Err(_) => {
+                    std::future::pending::<()>().await;
+                }
+            }
+        };
+
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = term => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
 

@@ -1,15 +1,23 @@
 use crate::metrics::prometheus::REGISTRY;
-use prometheus::Encoder;
+use prometheus::{Encoder, TextEncoder};
 use warp::Filter;
 
 pub async fn start_metrics() {
-    let route = warp::path("metrics").map(|| {
-        let mut buf = Vec::new();
-        let enc = prometheus::TextEncoder::new();
-        enc.encode(&REGISTRY.gather(), &mut buf).unwrap();
-        String::from_utf8(buf).unwrap()
+    let metrics_route = warp::path("metrics").and(warp::get()).map(|| {
+        let encoder = TextEncoder::new();
+        let metric_families = REGISTRY.gather();
+
+        let mut buffer = Vec::new();
+        if encoder.encode(&metric_families, &mut buffer).is_err() {
+            return warp::reply::with_status(
+                "failed to encode metrics".to_string(),
+                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            );
+        }
+
+        let body = String::from_utf8(buffer).unwrap_or_default();
+        warp::reply::with_status(body, warp::http::StatusCode::OK)
     });
 
-    // Run on port 9091
-    warp::serve(route).run(([0, 0, 0, 0], 9091)).await;
+    warp::serve(metrics_route).run(([0, 0, 0, 0], 9091)).await;
 }
