@@ -1,11 +1,11 @@
 use crate::ipc::types::Envelope;
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use log::{info, warn};
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    net::{TcpListener, TcpStream},
-    sync::mpsc,
-};
+use rkyv::{Deserialize, Infallible};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
+use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
 pub struct IpcServer {
@@ -40,6 +40,7 @@ pub async fn start(
                     info!("ipc shutting down");
                     break;
                 }
+
                 accepted = listener.accept() => {
                     let (stream, peer) = match accepted {
                         Ok(v) => v,
@@ -51,9 +52,10 @@ pub async fn start(
 
                     let txc = tx.clone();
                     let sd = shutdown.clone();
+                    let peer = peer.to_string();
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_conn(stream, peer.to_string(), txc, sd).await {
+                        if let Err(e) = handle_conn(stream, peer, txc, sd).await {
                             warn!("ipc connection ended: {}", e);
                         }
                     });
@@ -73,21 +75,28 @@ async fn handle_conn(
 ) -> Result<()> {
     info!("ipc connected peer={}", peer);
 
-    let mut lines = BufReader::new(stream).lines();
+    // ✅ Length-prefixed framing → rkyv SAFE
+    let mut framed = FramedRead::new(
+        stream,
+        LengthDelimitedCodec::builder()
+            .max_frame_length(64 * 1024) // siguri, jo bottleneck
+            .new_codec(),
+    );
 
     loop {
         tokio::select! {
             _ = shutdown.cancelled() => break,
-            line = lines.next_line() => {
-                let Some(line) = line.context("ipc read error")? else { break };
 
-                let env: Envelope = match serde_json::from_str(&line) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!("ipc invalid json from {}: {}", peer, e);
-                        continue;
-                    }
-                };
+            frame = framed.next() => {
+                let Some(frame) = frame else { break };
+                let bytes = frame.context("ipc frame error")?;
+
+                // ✅ verifikim strukture (pa UB)
+                let archived = rkyv::check_archived_root::<Envelope>(&bytes)
+                    .map_err(|_| anyhow::anyhow!("corrupt IPC frame"))?;
+
+                let env: Envelope =
+                    archived.deserialize(&mut Infallible)?;
 
                 if tx.try_send(env).is_err() {
                     warn!("ipc queue full; dropping message from {}", peer);

@@ -2,25 +2,25 @@ use crate::config::AppConfig;
 use crate::grpc::filter::raydium_transaction_filters;
 use crate::jito::bundle::JitoSender;
 use crate::rpc::client::SolanaRpc;
-use crate::strategy::raydium::RaydiumStrategy;
 
 use anyhow::{anyhow, Context, Result};
 use futures::{SinkExt, StreamExt};
 use http::Uri;
 use log::{debug, error, info, warn};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::time::{sleep, Duration};
-use tonic::Status;
 use tonic::transport::ClientTlsConfig;
+use tonic::Status;
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::geyser::{SubscribeRequest, SubscribeRequestPing};
 
 pub struct GeyserClient {
     cfg: Arc<AppConfig>,
-    rpc: Arc<SolanaRpc>,
-    jito: Arc<JitoSender>,
+    _rpc: Arc<SolanaRpc>,   // kept for future, not used here
+    _jito: Arc<JitoSender>, // kept for future, not used here
     inflight: Arc<Semaphore>,
+    output: Option<mpsc::Sender<crate::geyser::LiquiditySignal>>,
 }
 
 impl GeyserClient {
@@ -28,10 +28,15 @@ impl GeyserClient {
         let max_inflight = cfg.grpc_max_inflight.max(1);
         Ok(Self {
             cfg,
-            rpc,
-            jito,
+            _rpc: rpc,
+            _jito: jito,
             inflight: Arc::new(Semaphore::new(max_inflight)),
+            output: None,
         })
+    }
+
+    pub fn set_output(&mut self, tx: mpsc::Sender<crate::geyser::LiquiditySignal>) {
+        self.output = Some(tx);
     }
 
     pub async fn run(self) -> Result<()> {
@@ -51,14 +56,12 @@ impl GeyserClient {
             match self.connect_and_consume().await {
                 Ok(()) => {
                     if shutdown.is_cancelled() {
-                        info!("grpc stream ended (shutdown)");
                         return Ok(());
                     }
                     warn!("grpc stream ended; reconnecting");
                 }
                 Err(e) => {
                     if shutdown.is_cancelled() {
-                        info!("grpc error during shutdown: {e:#}");
                         return Ok(());
                     }
                     error!("grpc error: {e:#}");
@@ -69,10 +72,7 @@ impl GeyserClient {
             debug!("grpc reconnect backoff_ms={}", backoff_ms);
 
             tokio::select! {
-                _ = shutdown.cancelled() => {
-                    info!("grpc loop stopped (shutdown)");
-                    return Ok(());
-                }
+                _ = shutdown.cancelled() => return Ok(()),
                 _ = sleep(sleep_dur) => {}
             }
 
@@ -84,30 +84,26 @@ impl GeyserClient {
         let shutdown = self.cfg.shutdown.token();
 
         let grpc_url = self.cfg.grpc_url.clone();
-        let mut builder = GeyserGrpcClient::build_from_shared(grpc_url.clone())
-            .context("invalid GRPC_URL")?;
+        let mut builder =
+            GeyserGrpcClient::build_from_shared(grpc_url.clone()).context("invalid GRPC_URL")?;
 
         if grpc_url.starts_with("https://") {
-            let uri: Uri = grpc_url.parse().context("invalid GRPC_URL (uri parse)")?;
-            let host = uri.host().ok_or_else(|| anyhow!("invalid GRPC_URL: missing host"))?;
+            let uri: Uri = grpc_url.parse().context("invalid GRPC_URL")?;
+            let host = uri.host().ok_or_else(|| anyhow!("GRPC_URL missing host"))?;
 
-            let tls = ClientTlsConfig::new()
-                .with_native_roots()
-                .domain_name(host);
+            let tls = ClientTlsConfig::new().with_native_roots().domain_name(host);
 
-            builder = builder
-                .tls_config(tls)
-                .context("failed to set grpc tls config")?;
+            builder = builder.tls_config(tls)?;
         }
 
         let mut client = builder
-            .x_token(Some(self.cfg.grpc_token.clone()))
-            .context("failed to set GRPC token")?
+            .x_token(Some(self.cfg.grpc_token.clone()))?
             .connect()
             .await
-            .context("failed to connect to geyser grpc")?;
+            .context("failed to connect geyser grpc")?;
 
-        let (mut subscribe_tx, mut stream) = client.subscribe().await.context("subscribe failed")?;
+        let (mut subscribe_tx, mut stream) =
+            client.subscribe().await.context("subscribe failed")?;
 
         let req = SubscribeRequest {
             transactions: raydium_transaction_filters(),
@@ -115,44 +111,32 @@ impl GeyserClient {
             ..Default::default()
         };
 
-        subscribe_tx
-            .send(req)
-            .await
-            .context("failed to send subscribe request")?;
+        subscribe_tx.send(req).await?;
 
-        info!("grpc subscribed: raydium_amm_v4");
+        info!("grpc subscribed (observer mode)");
 
         loop {
             tokio::select! {
-                _ = shutdown.cancelled() => {
-                    info!("grpc consume stopped (shutdown)");
-                    return Ok(());
-                }
+                _ = shutdown.cancelled() => return Ok(()),
                 next = stream.next() => {
                     match next {
-                        None => {
-                            warn!("grpc stream closed by server");
-                            return Ok(());
-                        }
+                        None => return Ok(()),
                         Some(Err(status)) => {
-                            return Err(status_to_anyhow(status).context("grpc stream error"));
+                            return Err(status_to_anyhow(status));
                         }
-                        Some(Ok(update)) => {
-                            let permit = match self.inflight.clone().acquire_owned().await {
-                                Ok(p) => p,
-                                Err(_) => return Ok(()),
-                            };
+                        Some(Ok(_update)) => {
+                            let _permit = self.inflight.acquire().await?;
 
-                            let rpc = self.rpc.clone();
-                            let jito = self.jito.clone();
-                            let cfg = self.cfg.clone();
+                            // OBSERVER PATTERN:
+                            // gRPC only forwards updates, no processing here
+                            if let Some(ref tx) = self.output {
+                                let signal = crate::geyser::LiquiditySignal {
+                                    account: "observer".to_string(),
+                                    slot:0,
+                                };
+                                let _ = tx.send(signal).await;
 
-                            tokio::spawn(async move {
-                                let _permit = permit;
-                                if let Err(e) = RaydiumStrategy::process_update(update, &rpc, &jito, &cfg).await {
-                                    error!("strategy error: {e:#}");
-                                }
-                            });
+                            }
                         }
                     }
                 }

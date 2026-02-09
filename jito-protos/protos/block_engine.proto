@@ -1,0 +1,7 @@
+syntax = "proto3";
+package block_engine;
+message SubscribePacketsRequest {}
+message SubscribePacketsResponse { repeated bytes packets = 1; }
+service BlockEngine {
+  rpc SubscribePackets (SubscribePacketsRequest) returns (stream SubscribePacketsResponse);
+}

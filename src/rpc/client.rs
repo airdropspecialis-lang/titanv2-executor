@@ -25,18 +25,19 @@ impl SolanaRpc {
         })
     }
 
-    #[allow(dead_code)]
+    pub async fn get_latest_blockhash(&self) -> Result<Hash> {
+        let hash = self.client.get_latest_blockhash().await?;
+        Ok(hash)
+    }
+
     pub fn client(&self) -> &RpcClient {
         &self.client
     }
 
-    #[allow(dead_code)]
-    pub fn latest_blockhash(&self) -> Arc<RwLock<Hash>> {
+    pub fn latest_blockhash_cache(&self) -> Arc<RwLock<Hash>> {
         self.latest_blockhash.clone()
     }
 
-    /// Background task:
-    /// Continuously refreshes the recent blockhash for fast transaction signing.
     pub async fn run_blockhash_monitor(&self, shutdown: CancellationToken) -> Result<()> {
         let mut consecutive_errors = 0u32;
 
@@ -53,10 +54,7 @@ impl SolanaRpc {
                 }
                 Err(err) => {
                     consecutive_errors = consecutive_errors.saturating_add(1);
-                    warn!(
-                        "failed to fetch blockhash (attempt {}): {}",
-                        consecutive_errors, err
-                    );
+                    warn!("failed to fetch blockhash: {}", err);
 
                     if consecutive_errors >= 10 {
                         error!("rpc blockhash monitor degraded");
@@ -66,9 +64,7 @@ impl SolanaRpc {
             }
 
             tokio::select! {
-                _ = shutdown.cancelled() => {
-                    return Ok(());
-                }
+                _ = shutdown.cancelled() => { return Ok(()); }
                 _ = sleep(Duration::from_millis(400)) => {}
             }
         }

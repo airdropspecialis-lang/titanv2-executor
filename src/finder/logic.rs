@@ -1,28 +1,14 @@
-use solana_sdk::pubkey::Pubkey;
-use tokio::sync::mpsc::Receiver;
+use crate::metrics::prometheus::REGISTRY;
+use prometheus::Encoder;
+use warp::Filter;
 
-use crate::finder::conflict_guard::ConflictGuard;
-use crate::finder::stream_worker::LiquiditySignal;
+pub async fn start_metrics() {
+    let route = warp::path("metrics").map(|| {
+        let mut buf = Vec::new();
+        let enc = prometheus::TextEncoder::new();
+        enc.encode(&REGISTRY.gather(), &mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    });
 
-pub async fn finder_loop(
-    mut rx: Receiver<LiquiditySignal>,
-) {
-    let mut conflict_guard = ConflictGuard::new();
-
-    while let Some(signal) = rx.recv().await {
-        let account = signal.account;
-        let slot = signal.slot;
-
-        // 🛡️ Conflict Guard (FINAL LINE OF DEFENSE)
-        if conflict_guard.should_skip(account, slot) {
-            continue;
-        }
-
-        // 👉 KËTU VETËM NJË HERË PËR account + slot:
-        // 1. Parse vault balances
-        // 2. Build opportunity
-        // 3. Delta simulation
-        // 4. Slippage-aware net_profit_ok
-        // 5. Send to JitoExecutor
-    }
+    warp::serve(route).run(([0, 0, 0, 0], 9091)).await;
 }

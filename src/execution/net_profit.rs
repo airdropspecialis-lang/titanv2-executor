@@ -1,4 +1,4 @@
-use log::{warn, error};
+use log::{error, warn};
 
 pub fn net_profit_ok(
     pre: u64,
@@ -16,8 +16,7 @@ pub fn net_profit_ok(
         return false;
     }
 
-    let min_out =
-        (input as u128 * (10_000 - slippage_bps as u128) / 10_000) as u64;
+    let min_out = (input as u128 * (10_000 - slippage_bps as u128) / 10_000) as u64;
 
     if post < min_out {
         warn!("SLIPPAGE FAIL");

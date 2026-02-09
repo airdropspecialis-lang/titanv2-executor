@@ -1,0 +1,3 @@
+syntax = "proto3";
+package block;
+message Block { uint64 slot = 1; string hash = 2; }

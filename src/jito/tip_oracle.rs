@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use reqwest::Client;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 pub struct TipOracle {
