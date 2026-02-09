@@ -1,6 +1,6 @@
-use warp::Filter;
+use crate::metrics::prometheus::REGISTRY;
 use prometheus::Encoder;
-use crate::metrics::REGISTRY;
+use warp::Filter;
 
 pub async fn start_metrics() {
     let route = warp::path("metrics").map(|| {
@@ -10,5 +10,6 @@ pub async fn start_metrics() {
         String::from_utf8(buf).unwrap()
     });
 
-    warp::serve(route).run(([0,0,0,0], 9091)).await;
+    // Run on port 9091
+    warp::serve(route).run(([0, 0, 0, 0], 9091)).await;
 }

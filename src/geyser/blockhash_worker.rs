@@ -1,16 +1,12 @@
 use anyhow::Result;
 use futures::StreamExt;
 use log::info;
-use std::sync::Arc;
 
 use yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient};
-use yellowstone_grpc_proto::geyser::{
-    SubscribeRequest,
-    SubscribeRequestFilterSlots,
-};
+use yellowstone_grpc_proto::geyser::{SubscribeRequest, SubscribeRequestFilterSlots};
 
-use solana_client::nonblocking::rpc_client::RpcClient;
 use crate::state::blockhash::BlockhashCache;
+use solana_client::nonblocking::rpc_client::RpcClient;
 
 pub async fn run_geyser_blockhash_worker(
     grpc_url: String,
@@ -20,7 +16,6 @@ pub async fn run_geyser_blockhash_worker(
 ) -> Result<()> {
     let rpc = RpcClient::new(rpc_url);
 
-    // Initial hash (boot)
     let initial = rpc.get_latest_blockhash().await?;
     cache.set(initial);
 
@@ -33,10 +28,8 @@ pub async fn run_geyser_blockhash_worker(
     let mut client = builder.connect().await?;
 
     let mut req = SubscribeRequest::default();
-    req.slots.insert(
-        "slots".to_string(),
-        SubscribeRequestFilterSlots::default(),
-    );
+    req.slots
+        .insert("slots".to_string(), SubscribeRequestFilterSlots::default());
 
     let (_, mut stream) = client.subscribe_with_request(Some(req)).await?;
 
@@ -46,7 +39,6 @@ pub async fn run_geyser_blockhash_worker(
         let Ok(update) = msg else { continue };
 
         if update.update_oneof.is_some() {
-            // SLOT advanced → refresh hash immediately
             if let Ok(h) = rpc.get_latest_blockhash().await {
                 cache.set(h);
             }

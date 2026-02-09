@@ -4,8 +4,10 @@ use std::io::Write;
 
 pub fn init() {
     // Respect RUST_LOG if set, otherwise fall back to LOG_LEVEL or "info"
-    let env = Env::default()
-        .filter_or("RUST_LOG", std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()));
+    let env = Env::default().filter_or(
+        "RUST_LOG",
+        std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
+    );
 
     let mut builder = Builder::from_env(env);
 

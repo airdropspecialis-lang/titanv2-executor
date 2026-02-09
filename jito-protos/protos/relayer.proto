@@ -1,0 +1,7 @@
+syntax = "proto3";
+package relayer;
+message GetTpuConfigsRequest {}
+message GetTpuConfigsResponse { string tpu_addr = 1; }
+service Relayer {
+  rpc GetTpuConfigs (GetTpuConfigsRequest) returns (GetTpuConfigsResponse);
+}

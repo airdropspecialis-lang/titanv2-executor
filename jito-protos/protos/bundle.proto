@@ -1,0 +1,52 @@
+syntax = "proto3";
+package bundle;
+import "packet.proto";
+import "shared.proto";
+
+message Bundle {
+    shared.Header header = 1;
+    repeated packet.Packet packets = 2;
+}
+
+message BundleResult {
+    string bundle_id = 1;
+    oneof result {
+        Accepted accepted = 2;
+        Rejected rejected = 3;
+    }
+}
+
+message Accepted {
+    uint64 slot = 1;
+    string validator_identity = 2;
+}
+
+message Rejected {
+    oneof reason {
+        StateAuctionBidRejected state_auction_bid_rejected = 1;
+        WinningBatchBidRejected winning_batch_bid_rejected = 2;
+        SimulationFailure simulation_failure = 3;
+        InternalError internal_error = 4;
+    }
+}
+
+message StateAuctionBidRejected {
+    string msg = 1;
+    string auction_id = 2;
+    uint64 simulated_bid_lamports = 3;
+}
+
+message WinningBatchBidRejected {
+    string msg = 1;
+    string auction_id = 2;
+    uint64 simulated_bid_lamports = 3;
+}
+
+message SimulationFailure {
+    string msg = 1;
+    string tx_signature = 2;
+}
+
+message InternalError {
+    string msg = 1;
+}

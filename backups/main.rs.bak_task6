@@ -1,5 +1,3 @@
-#![allow(dead_code, unused_imports)]
-
 mod blockhash;
 mod config;
 mod execution;
@@ -16,9 +14,12 @@ mod state;
 mod utils;
 
 use crate::config::AppConfig;
+use crate::grpc::client::GeyserClient;
 use crate::ipc::types::{Envelope, Payload};
+use crate::jito::bundle::JitoSender;
 use crate::jito::executor::JitoExecutor;
 use crate::jito::tip_oracle::TipOracle;
+use crate::rpc::client::SolanaRpc;
 use crate::utils::keypair::load_keypair;
 
 use anyhow::{Context, Result};
@@ -48,6 +49,8 @@ async fn main() -> Result<()> {
     let keypair = load_keypair(&cfg.keypair_path)?;
     info!("signer_pubkey={}", keypair.pubkey());
 
+    let rpc = Arc::new(SolanaRpc::new(&cfg.rpc_url).context("failed to initialize rpc client")?);
+
     let tip_oracle = Box::leak(Box::new(TipOracle::new(100_000)));
 
     let executor = Arc::new(
@@ -55,6 +58,14 @@ async fn main() -> Result<()> {
             .await
             .context("failed to initialize jito executor")?,
     );
+
+    let jito_sender = Arc::new(JitoSender::new(executor.clone()));
+
+    let mut geyser = GeyserClient::new(cfg.clone(), rpc.clone(), jito_sender.clone())
+        .context("failed to initialize geyser client")?;
+
+    let (geyser_tx, _geyser_rx) = tokio::sync::mpsc::channel(2048);
+    geyser.set_output(geyser_tx);
 
     let ipc = ipc::server::start(
         &cfg.ipc_listen_host,
@@ -73,6 +84,8 @@ async fn main() -> Result<()> {
         let exec = executor.clone();
         tasks.spawn(async move { run_ipc(rx, exec, shutdown).await });
     }
+
+    tasks.spawn(async move { geyser.run().await });
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
@@ -124,6 +137,7 @@ async fn run_ipc(
                     Payload::Ping(nonce) => {
                         info!("ipc ping id={} nonce={}", env.id, nonce);
                     }
+
                     Payload::Opportunity(o) => {
                         executor.submit_opportunity(o).await?;
                     }

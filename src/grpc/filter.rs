@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use yellowstone_grpc_proto::geyser::SubscribeRequestFilterTransactions;
 
 /// Raydium AMM v4 program (mainnet)
-pub const RAYDIUM_AMM_V4_PROGRAM: &str =
-    "675kPX9MHTjS2zt1qfr1NYHuHdiXESLiG1e66f4Hmcfs";
+pub const RAYDIUM_AMM_V4_PROGRAM: &str = "675kPX9MHTjS2zt1qfr1NYHuHdiXESLiG1e66f4Hmcfs";
 
 /// Builds a strict Yellowstone transaction filter that:
 /// - excludes votes

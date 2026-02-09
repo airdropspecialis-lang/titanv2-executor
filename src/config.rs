@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
+use solana_sdk::signer::keypair::Keypair;
 use std::env;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -15,6 +17,8 @@ pub struct AppConfig {
     pub jito_tip_lamports: u64,
 
     pub keypair_path: String,
+
+    pub signer: Arc<Keypair>,
 
     pub min_liquidity: f64,
 
@@ -64,6 +68,11 @@ impl AppConfig {
         let jito_tip_account = required("JITO_TIP_ACCOUNT")?;
         let keypair_path = required("KEYPAIR_PATH")?;
 
+        // Ngarkimi i Keypair nga skedari
+        let keypair_raw = solana_sdk::signature::read_keypair_file(&keypair_path)
+            .map_err(|e| anyhow::anyhow!("Dështoi leximi i keypair te {}: {}", keypair_path, e))?;
+        let signer = Arc::new(keypair_raw);
+
         let jito_tip_lamports = env_u64("JITO_TIP_LAMPORTS", 100_000)?;
         let min_liquidity = env_f64("MIN_LIQUIDITY", 50.0)?;
 
@@ -88,6 +97,7 @@ impl AppConfig {
             jito_tip_account,
             jito_tip_lamports,
             keypair_path,
+            signer,
             min_liquidity,
             grpc_max_inflight,
             grpc_reconnect_min_ms,

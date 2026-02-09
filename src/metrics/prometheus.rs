@@ -1,17 +1,8 @@
-use prometheus::{
-    Counter, CounterVec, Histogram, Registry,
-    opts, register_counter_with_registry,
-    register_counter_vec_with_registry,
-    register_histogram_with_registry,
-};
 use lazy_static::lazy_static;
-
-lazy_static! {
 use prometheus::{
     opts, register_counter_vec_with_registry, register_counter_with_registry,
     register_histogram_with_registry, Counter, CounterVec, Histogram, Registry,
 };
-use lazy_static::lazy_static;
 
 lazy_static! {
     pub static ref REGISTRY: Registry = Registry::new();
@@ -20,14 +11,14 @@ lazy_static! {
     pub static ref OPPORTUNITIES_TOTAL: Counter =
         register_counter_with_registry!(
             opts!("mev_opportunities_total", "Total MEV opportunities detected"),
-            REGISTRY
+            &REGISTRY
         ).unwrap();
 
     // Opportunities successfully sent to Jito
     pub static ref LANDED_TOTAL: Counter =
         register_counter_with_registry!(
             opts!("mev_landed_total", "Bundles successfully sent"),
-            REGISTRY
+            &REGISTRY
         ).unwrap();
 
     // Simulation failures by reason
@@ -36,14 +27,14 @@ lazy_static! {
             "mev_sim_failures",
             "Simulation failures by reason",
             &["reason"],
-            REGISTRY
+            &REGISTRY
         ).unwrap();
 
     // Net profit (lamports)
     pub static ref NET_PROFIT_LAMPORTS: Counter =
         register_counter_with_registry!(
             opts!("mev_net_profit_lamports", "Total net profit in lamports"),
-            REGISTRY
+            &REGISTRY
         ).unwrap();
 
     // Execution latency (ms)
@@ -51,6 +42,6 @@ lazy_static! {
         register_histogram_with_registry!(
             "mev_execution_latency_ms",
             "Time from detection to bundle send",
-            REGISTRY
+            &REGISTRY
         ).unwrap();
 }
